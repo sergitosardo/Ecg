@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>H10 ECG Recorder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column — live ECG strip on chart paper, readouts, controls, then reference notes. Light = paper chart, dark = bedside monitor. */
+:root {
+  --bg: #f3f3f1;
+  --surface: #ffffff;
+  --fg: #1c2024;
+  --muted: #5d646b;
+  --line: #dadad5;
+  --accent: #c02f37;
+  --accent-fg: #ffffff;
+  --ok: #2c7a4b;
+  --warn: #9a6400;
+  --err: #b3261e;
+  --paper: #fff9f7;
+  --grid-minor: #f5dcda;
+  --grid-major: #e3a3a2;
+  --trace: #1c2024;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c0f11; --surface: #141a1d; --fg: #e6ebed; --muted: #8f9ba1; --line: #253036;
+    --accent: #ff5b61; --accent-fg: #14090a; --ok: #6ee59c; --warn: #f0b54a; --err: #ff8a80;
+    --paper: #081011; --grid-minor: #11201c; --grid-major: #1d3a31; --trace: #72f0a6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0f11; --surface: #141a1d; --fg: #e6ebed; --muted: #8f9ba1; --line: #253036;
+  --accent: #ff5b61; --accent-fg: #14090a; --ok: #6ee59c; --warn: #f0b54a; --err: #ff8a80;
+  --paper: #081011; --grid-minor: #11201c; --grid-major: #1d3a31; --trace: #72f0a6;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; }
+.wrap {
+  max-width: 1040px; margin: 0 auto; display: grid; gap: 20px;
+  padding-block: max(24px, env(safe-area-inset-top, 0px)) max(48px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 1.5rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: .875rem; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: .8125rem; font-weight: 500;
+}
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill[data-state="live"]::before { background: var(--ok); }
+.pill[data-state="rec"]::before { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.pill[data-state="warn"]::before, .pill[data-state="busy"]::before { background: var(--warn); }
+.pill[data-state="err"]::before { background: var(--err); }
+@keyframes pulse { 50% { opacity: .25; } }
+
+.notice { border: 1px solid var(--warn); background: var(--surface); padding: 12px 14px; border-radius: 6px; font-size: .875rem; max-width: 80ch; }
+
+.strip { position: relative; border: 1px solid var(--grid-major); border-radius: 6px; overflow: hidden; background: var(--paper); }
+.strip canvas { display: block; width: 100%; height: 200px; }
+.scale, .tag {
+  position: absolute; font: 500 .75rem/1 var(--font-num); color: var(--muted);
+  background: var(--paper); padding: 4px 6px; border-radius: 4px; border: 1px solid var(--grid-major);
+}
+.scale { right: 8px; bottom: 8px; display: flex; gap: 10px; }
+.tag { right: 8px; top: 8px; text-transform: uppercase; letter-spacing: .08em; }
+
+.readouts {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+}
+.readout { background: var(--surface); padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
+.label { font-size: .6875rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 500; }
+.value { font: 500 1.5rem/1.2 var(--font-num); font-variant-numeric: tabular-nums; }
+.unit { font: 400 .8125rem var(--font-ui); color: var(--muted); margin-left: 4px; }
+.detail { font: .75rem var(--font-num); color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.spacer { flex: 1 1 0; min-width: 0; }
+.btn {
+  font: 500 .9375rem var(--font-ui); padding: 10px 16px; min-height: 44px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+}
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn.rec { display: inline-flex; align-items: center; gap: 8px; }
+.btn.rec::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.btn.rec.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn.rec.on::before { border-radius: 2px; background: var(--accent-fg); }
+kbd { font: .75rem var(--font-num); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+
+.msg { min-height: 1.5em; margin: -6px 0 0; font-size: .875rem; color: var(--muted); }
+.msg[data-tone="ok"] { color: var(--ok); }
+.msg[data-tone="warn"] { color: var(--warn); }
+.msg[data-tone="err"] { color: var(--err); }
+
+.notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; border-top: 1px solid var(--line); padding-top: 20px; }
+@media (max-width: 720px) { .notes { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+.notes h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.notes ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: .875rem; max-width: 65ch; }
+.notes dl { margin: 0; display: grid; gap: 10px; font-size: .875rem; }
+.notes dd { margin: 2px 0 0; color: var(--muted); max-width: 60ch; }
+code { font-family: var(--font-num); font-size: .85em; overflow-wrap: anywhere; }
+footer { font-size: .75rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .pill::before { animation: none !important; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div>
+      <h1>H10 ECG Recorder</h1>
+      <p class="sub">Raw single-lead ECG from a Polar H10 · 130 Hz · microvolts · saved as CSV on this computer</p>
+    </div>
+    <span id="status" class="pill" data-state="idle">Demo signal</span>
+  </header>
+
+  <div id="unsupported" class="notice" hidden>
+    This browser can’t connect to Bluetooth sensors. Open this file in <strong>Chrome</strong> or <strong>Edge</strong> on a Mac, Windows PC or Android phone. Safari and other iPhone browsers can’t do this (the Bluefy browser is the exception).
+  </div>
+
+  <section class="strip" aria-label="Live ECG">
+    <canvas id="ecg" role="img" aria-label="Live ECG trace on chart paper"></canvas>
+    <span id="demoTag" class="tag">Demo signal</span>
+    <span class="scale"><span>25 mm/s</span><span>10 mm/mV</span></span>
+  </section>
+
+  <section class="readouts" aria-label="Readings">
+    <div class="readout"><span class="label">Heart rate</span><span class="value"><span id="hrVal">—</span><span class="unit">bpm</span></span><span class="detail">from the strap</span></div>
+    <div class="readout"><span class="label">Last R–R</span><span class="value"><span id="rrVal">—</span><span class="unit">ms</span></span><span class="detail">beat-to-beat interval</span></div>
+    <div class="readout"><span class="label">Captured</span><span class="value" id="durVal">0:00:00</span><span class="detail" id="sizeVal">Not recording</span></div>
+    <div class="readout"><span class="label">Battery</span><span class="value"><span id="batVal">—</span><span class="unit">%</span></span><span class="detail" id="devVal">No sensor connected</span></div>
+  </section>
+
+  <section class="controls" aria-label="Controls">
+    <button id="connectBtn" class="btn primary" type="button">Connect H10</button>
+    <button id="recBtn" class="btn rec" type="button" disabled>Start recording</button>
+    <button id="markBtn" class="btn" type="button" disabled title="Shortcut: M">Add marker <kbd>M</kbd></button>
+    <span class="spacer"></span>
+    <button id="ecgDl" class="btn" type="button" disabled>Download ECG CSV</button>
+    <button id="rrDl" class="btn" type="button" disabled>Download HR/RR CSV</button>
+  </section>
+  <p id="msg" class="msg" role="status" aria-live="polite">Showing a demo trace. Put on the strap and press Connect H10.</p>
+
+  <section class="notes">
+    <div>
+      <h2>Before you start</h2>
+      <ul>
+        <li>Wet the two electrode areas on the strap and wear it snug. The H10 only wakes up on skin contact.</li>
+        <li>Close other apps that are streaming from the strap (Polar Flow syncing in the background is fine).</li>
+        <li>ECG streaming needs H10 firmware 3.0.35 or later. Update it in Polar Flow if the connection works but no trace appears.</li>
+        <li>Keep this tab in front while recording. The page asks the screen to stay on. Data lives in memory until you download it (roughly 25 MB of CSV per hour).</li>
+        <li>If the strap drops out, the page reconnects by itself and keeps recording. Any gap shows up in the timestamps.</li>
+        <li>If Connect reports that Bluetooth isn’t allowed, open Terminal in the folder with this file, run <code>python3 -m http.server 8000</code>, and visit <code>http://localhost:8000/</code>.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>What’s in the files</h2>
+      <dl>
+        <div><dt><code>polar-h10-ecg-….csv</code></dt>
+          <dd>One row per sample (130 per second): <code>elapsed_s</code> from the first sample on the sensor clock, <code>unix_time_ms</code> wall-clock time anchored to this computer, <code>sensor_timestamp_ns</code> from the H10, <code>ecg_uV</code> raw value in microvolts (divide by 1000 for mV), and <code>marker</code> (M1, M2 … where you pressed Add marker).</dd></div>
+        <div><dt><code>polar-h10-hr-rr-….csv</code></dt>
+          <dd><code>unix_time_ms</code>, <code>hr_bpm</code> and <code>rr_ms</code> as reported by the strap, one row per R–R interval. Useful for HRV tools such as Kubios.</dd></div>
+      </dl>
+    </div>
+  </section>
+  <footer>The H10 is a consumer sensor, not a medical device. Nothing is uploaded: the recording stays in this browser until you download it.</footer>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const PMD_SERVICE = 'fb005c80-02e7-f387-1cad-8acd2d8df0c8';
+  const PMD_CTRL = 'fb005c81-02e7-f387-1cad-8acd2d8df0c8';
+  const PMD_DATA = 'fb005c82-02e7-f387-1cad-8acd2d8df0c8';
+  const FS = 130;
+  const PERIOD_NS = 1e9 / FS;
+  // Start ECG: op 0x02, type 0x00 (ECG), sample rate 130 Hz, resolution 14 bit
+  const START_ECG = new Uint8Array([0x02, 0x00, 0x00, 0x01, 0x82, 0x00, 0x01, 0x01, 0x0E, 0x00]);
+  const STOP_ECG = new Uint8Array([0x03, 0x00]);
+  const PMD_ERRORS = { 1: 'invalid op code', 2: 'invalid measurement type', 3: 'not supported', 4: 'invalid length', 5: 'invalid parameter', 6: 'already streaming', 7: 'invalid resolution', 8: 'invalid sample rate', 9: 'invalid range', 10: 'invalid MTU', 11: 'invalid number of channels', 12: 'invalid state', 13: 'the strap is charging' };
+  const RING = FS * 12;
+  const BASE_ALPHA = 1 / (FS * 2);
+
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    status: $('status'), connect: $('connectBtn'), rec: $('recBtn'), mark: $('markBtn'),
+    ecgDl: $('ecgDl'), rrDl: $('rrDl'), msg: $('msg'), canvas: $('ecg'), demoTag: $('demoTag'),
+    unsupported: $('unsupported'), hr: $('hrVal'), rr: $('rrVal'), bat: $('batVal'), dev: $('devVal'),
+    dur: $('durVal'), size: $('sizeVal')
+  };
+
+  const st = {
+    device: null, ctrl: null, connected: false, busy: false, reconnecting: false, lost: false, userDisconnect: false,
+    demo: true, liveFresh: false, pending: null,
+    ring: new Float32Array(RING), count: 0, head: 0, baseline: null,
+    recording: false, frames: [], recSamples: 0, t0: null, anchorMs: 0, recStart: null, markers: [], rr: [], saved: true,
+    hr: null, lastRr: null, battery: null,
+    demoPhase: 0, demoRR: 0.85, demoAcc: 0, demoT: 0
+  };
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmtDur = (s) => { s = Math.floor(s); return Math.floor(s / 3600) + ':' + pad(Math.floor(s / 60) % 60) + ':' + pad(s % 60); };
+  const fmtMB = (b) => (b / 1e6).toFixed(b < 1e7 ? 1 : 0) + ' MB';
+  const stamp = (d) => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+
+  function say(text, tone) { ui.msg.textContent = text; ui.msg.dataset.tone = tone || 'info'; }
+
+  function refresh() {
+    let state = 'idle', label = st.demo ? 'Demo signal' : 'Not connected';
+    if (st.busy) { state = 'busy'; label = 'Connecting…'; }
+    else if (st.reconnecting) { state = 'warn'; label = 'Reconnecting…'; }
+    else if (st.recording && st.connected) { state = 'rec'; label = 'Recording'; }
+    else if (st.connected) { state = 'live'; label = 'Live'; }
+    else if (st.lost) { state = 'err'; label = 'Connection lost'; }
+    ui.status.dataset.state = state;
+    ui.status.textContent = label;
+
+    ui.connect.textContent = (st.connected || st.reconnecting) ? 'Disconnect' : 'Connect H10';
+    ui.connect.classList.toggle('primary', !(st.connected || st.reconnecting));
+    ui.connect.disabled = st.busy;
+    ui.rec.disabled = !(st.connected || st.recording);
+    ui.rec.textContent = st.recording ? 'Stop recording' : 'Start recording';
+    ui.rec.classList.toggle('on', st.recording);
+    ui.mark.disabled = !st.recording;
+    ui.ecgDl.disabled = st.recording || st.frames.length === 0;
+    ui.rrDl.disabled = st.recording || st.rr.length === 0;
+    ui.demoTag.hidden = !st.demo;
+  }
+
+  function describe(err) {
+    const name = err && err.name;
+    const message = (err && err.message) || '';
+    if (name === 'NotFoundError') {
+      if (/adapter|bluetooth.*(off|unavailable)/i.test(message)) return 'Bluetooth is off on this device. Turn it on and try again.';
+      return 'No sensor was selected. Wear the strap so it wakes up, then try again.';
+    }
+    if (name === 'SecurityError') return 'This page isn’t allowed to use Bluetooth here. Open it directly in Chrome or Edge, or serve it from localhost (see “Before you start”).';
+    if (name === 'NetworkError') return 'The connection failed. Make sure no other app is streaming from the strap, then try again.';
+    if (name === 'NotSupportedError') return 'This browser or computer doesn’t support the Bluetooth features the H10 needs.';
+    return message || 'Something went wrong while talking to the sensor.';
+  }
+
+  /* ---------- Bluetooth ---------- */
+  async function connect() {
+    if (!navigator.bluetooth) {
+      ui.unsupported.hidden = false;
+      say('This browser can’t reach Bluetooth sensors. Open the file in Chrome or Edge.', 'err');
+      return;
+    }
+    let device;
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'Polar H10' }],
+        optionalServices: [PMD_SERVICE, 'heart_rate', 'battery_service']
+      });
+    } catch (err) { say(describe(err), 'err'); return; }
+
+    st.device = device; st.userDisconnect = false; st.lost = false;
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    st.busy = true; refresh();
+    say('Connecting to ' + (device.name || 'the H10') + '…');
+    try {
+      await openStreams();
+      say('Streaming ECG from ' + (device.name || 'the H10') + '. Press Start recording when you’re ready.', 'ok');
+    } catch (err) {
+      say(describe(err), 'err');
+      st.userDisconnect = true;
+      try { if (device.gatt.connected) device.gatt.disconnect(); else st.userDisconnect = false; } catch (e) { st.userDisconnect = false; }
+    } finally { st.busy = false; refresh(); }
+  }
+
+  async function openStreams() {
+    const server = await st.device.gatt.connect();
+
+    try {
+      const bs = await server.getPrimaryService('battery_service');
+      const bl = await bs.getCharacteristic('battery_level');
+      st.battery = (await bl.readValue()).getUint8(0);
+    } catch (e) { /* battery is optional */ }
+
+    try {
+      const hs = await server.getPrimaryService('heart_rate');
+      const hc = await hs.getCharacteristic('heart_rate_measurement');
+      hc.addEventListener('characteristicvaluechanged', onHr);
+      await hc.startNotifications();
+    } catch (e) { /* HR is optional; ECG still works */ }
+
+    const pmd = await server.getPrimaryService(PMD_SERVICE);
+    const ctrl = await pmd.getCharacteristic(PMD_CTRL);
+    const data = await pmd.getCharacteristic(PMD_DATA);
+    ctrl.addEventListener('characteristicvaluechanged', onCtrl);
+    data.addEventListener('characteristicvaluechanged', onPmdData);
+    await ctrl.startNotifications();
+    await data.startNotifications();
+    st.ctrl = ctrl;
+
+    const reply = await sendCtrl(START_ECG, 4000);
+    if (reply && reply.err && reply.err !== 6) {
+      throw new Error('The H10 refused to start ECG (' + (PMD_ERRORS[reply.err] || 'code ' + reply.err) + ').');
+    }
+
+    if (st.demo) {
+      st.demo = false; st.ring.fill(0); st.count = 0; st.head = 0; st.baseline = null; st.liveFresh = true;
+    }
+    st.connected = true;
+    ui.dev.textContent = st.device.name || 'Polar H10';
+  }
+
+  function sendCtrl(bytes, timeoutMs) {
+    const reply = new Promise((resolve) => {
+      const t = setTimeout(() => { st.pending = null; resolve(null); }, timeoutMs);
+      st.pending = (r) => { clearTimeout(t); st.pending = null; resolve(r); };
+    });
+    const ch = st.ctrl;
+    const write = ch.writeValueWithResponse ? ch.writeValueWithResponse(bytes) : ch.writeValue(bytes);
+    return write.then(() => reply);
+  }
+
+  function onCtrl(e) {
+    const v = e.target.value;
+    if (v.byteLength >= 4 && v.getUint8(0) === 0xF0 && st.pending) {
+      st.pending({ op: v.getUint8(1), type: v.getUint8(2), err: v.getUint8(3) });
+    }
+  }
+
+  function onPmdData(e) {
+    const v = e.target.value;
+    if (v.byteLength < 13 || v.getUint8(0) !== 0x00 || v.getUint8(9) !== 0x00) return; // ECG, raw frame only
+    const n = Math.floor((v.byteLength - 10) / 3);
+    const ts = v.getBigUint64(1, true); // timestamp of the last sample in the frame, ns
+    const s = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      const o = 10 + 3 * i;
+      let x = v.getUint8(o) | (v.getUint8(o + 1) << 8) | (v.getUint8(o + 2) << 16);
+      if (x & 0x800000) x -= 0x1000000;
+      s[i] = x;
+      pushOne(x);
+    }
+    if (st.liveFresh) { st.head = st.count - FS; st.liveFresh = false; }
+    if (st.recording) recordFrame(ts, s);
+  }
+
+  function onHr(e) {
+    const v = e.target.value;
+    const flags = v.getUint8(0);
+    let o = 1, hr;
+    if (flags & 0x01) { hr = v.getUint16(o, true); o += 2; } else { hr = v.getUint8(o); o += 1; }
+    if (flags & 0x08) o += 2;
+    const rrs = [];
+    if (flags & 0x10) {
+      while (o + 1 < v.byteLength) { rrs.push(Math.round(v.getUint16(o, true) * 1000 / 1024)); o += 2; }
+    }
+    st.hr = hr;
+    if (rrs.length) st.lastRr = rrs[rrs.length - 1];
+    if (st.recording) {
+      const t = Date.now();
+      if (rrs.length) rrs.forEach((r) => st.rr.push([t, hr, r]));
+      else st.rr.push([t, hr, '']);
+    }
+  }
+
+  async function onDisconnected() {
+    const wasConnected = st.connected;
+    st.connected = false; st.ctrl = null; st.hr = null;
+    if (st.userDisconnect || !wasConnected) { st.userDisconnect = false; refresh(); return; }
+
+    st.reconnecting = true; refresh();
+    say('Signal lost. Reconnecting…', 'warn');
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      await sleep(1000 * attempt);
+      if (!st.reconnecting) return;
+      try {
+        await openStreams();
+        st.reconnecting = false; refresh();
+        say('Reconnected' + (st.recording ? '. Recording continues.' : '.'), 'ok');
+        return;
+      } catch (e) { /* try again */ }
+    }
+    st.reconnecting = false; st.lost = true; refresh();
+    say(st.recording ? 'Couldn’t reconnect. Press Stop recording to keep what was captured.' : 'Couldn’t reconnect. Press Connect H10 to try again.', 'err');
+  }
+
+  async function disconnect() {
+    st.reconnecting = false; st.lost = false;
+    if (st.recording) stopRecording(true);
+    st.userDisconnect = true;
+    try { if (st.ctrl) await sendCtrl(STOP_ECG, 1500); } catch (e) { /* ignore */ }
+    try {
+      if (st.device && st.device.gatt.connected) st.device.gatt.disconnect();
+      else st.userDisconnect = false;
+    } catch (e) { st.userDisconnect = false; }
+    st.connected = false; st.ctrl = null; st.hr = null;
+    ui.dev.textContent = 'No sensor connected';
+    refresh();
+    say(st.frames.length && !st.saved ? 'Disconnected. Your recording is kept; download it below.' : 'Disconnected.');
+  }
+
+  /* ---------- Recording ---------- */
+  function startRecording() {
+    st.frames = []; st.recSamples = 0; st.t0 = null; st.anchorMs = 0;
+    st.markers = []; st.rr = []; st.recStart = new Date(); st.saved = false;
+    st.recording = true; keepAwake(true); refresh();
+    say('Recording. Keep this tab open and in front.', 'ok');
+  }
+
+  function stopRecording(quiet) {
+    st.recording = false; keepAwake(false); refresh();
+    if (!quiet) say('Recording stopped after ' + fmtDur(st.recSamples / FS) + '. Download the files below.', 'ok');
+  }
+
+  function recordFrame(ts, s) {
+    if (st.t0 === null) {
+      st.t0 = ts - BigInt(Math.round((s.length - 1) * PERIOD_NS));
+      st.anchorMs = Date.now() - (s.length - 1) * 1000 / FS;
+    }
+    st.frames.push({ ts, s });
+    st.recSamples += s.length;
+  }
+
+  function addMarker() {
+    if (!st.recording) return;
+    const label = 'M' + (st.markers.length + 1);
+    st.markers.push({ t: Date.now(), label });
+    say('Marker ' + label + ' added at ' + fmtDur(st.recSamples / FS) + '.', 'ok');
+  }
+
+  function buildEcgCsv() {
+    const parts = ['elapsed_s,unix_time_ms,sensor_timestamp_ns,ecg_uV,marker\n'];
+    const marks = st.markers;
+    let mi = 0, rows = [];
+    for (const f of st.frames) {
+      const n = f.s.length;
+      for (let i = 0; i < n; i++) {
+        const ns = f.ts - BigInt(Math.round((n - 1 - i) * PERIOD_NS));
+        const el = Number(ns - st.t0) / 1e9;
+        const unix = st.anchorMs + el * 1000;
+        let mk = '';
+        while (mi < marks.length && unix >= marks[mi].t) { mk = mk ? mk + ' ' + marks[mi].label : marks[mi].label; mi++; }
+        rows.push(el.toFixed(4) + ',' + unix.toFixed(1) + ',' + ns + ',' + f.s[i] + ',' + mk);
+        if (rows.length >= 20000) { parts.push(rows.join('\n') + '\n'); rows = []; }
+      }
+    }
+    if (rows.length) parts.push(rows.join('\n') + '\n');
+    return new Blob(parts, { type: 'text/csv' });
+  }
+
+  function buildRrCsv() {
+    const lines = ['unix_time_ms,hr_bpm,rr_ms'];
+    for (const [t, hr, rr] of st.rr) lines.push(t + ',' + hr + ',' + rr);
+    return new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+  }
+
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 15000);
+  }
+
+  let wakeLock = null;
+  async function keepAwake(on) {
+    try {
+      if (on && 'wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+    } catch (e) { /* screen may still sleep; recording continues while the tab is open */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && st.recording) keepAwake(true);
+  });
+
+  /* ---------- Live display ---------- */
+  function pushOne(x) {
+    if (st.baseline === null) st.baseline = x;
+    st.baseline += (x - st.baseline) * BASE_ALPHA;
+    st.ring[st.count % RING] = x - st.baseline;
+    st.count++;
+  }
+
+  function demoWave(t) {
+    const g = (c, a, w) => a * Math.exp(-((t - c) * (t - c)) / (2 * w * w));
+    return g(0.16, 110, 0.022) + g(0.30, -120, 0.008) + g(0.33, 1150, 0.009) + g(0.36, -280, 0.010) + g(0.58, 290, 0.04);
+  }
+
+  function runDemo(dt) {
+    st.demoAcc += dt * FS;
+    const n = Math.floor(st.demoAcc);
+    st.demoAcc -= n;
+    for (let i = 0; i < n; i++) {
+      st.demoPhase += 1 / FS; st.demoT += 1 / FS;
+      if (st.demoPhase >= st.demoRR) { st.demoPhase -= st.demoRR; st.demoRR = 0.80 + Math.random() * 0.1; }
+      pushOne(demoWave(st.demoPhase) + 40 * Math.sin(st.demoT * Math.PI * 0.5) + (Math.random() - 0.5) * 14);
+    }
+  }
+
+  const cv = ui.canvas, ctx = cv.getContext('2d');
+  const grid = document.createElement('canvas');
+  let dpr = 1, pxPerMm = 4, colors = {};
+
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement);
+    const get = (n) => cs.getPropertyValue(n).trim();
+    colors = { paper: get('--paper'), minor: get('--grid-minor'), major: get('--grid-major'), trace: get('--trace') };
+    buildGrid();
+  }
+
+  let lastW = 0, lastDpr = 0;
+  function resize() {
+    const cssW = cv.getBoundingClientRect().width || 600;
+    if (cssW === lastW && (window.devicePixelRatio || 1) === lastDpr) return;
+    lastW = cssW; lastDpr = window.devicePixelRatio || 1;
+    dpr = window.devicePixelRatio || 1;
+    const mm = Math.max(4, cssW / 150);       // CSS px per mm
+    const cssH = Math.round(mm * 40);         // 40 mm tall strip
+    cv.style.height = cssH + 'px';
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssH * dpr);
+    pxPerMm = mm * dpr;
+    buildGrid();
+  }
+
+  function buildGrid() {
+    const W = cv.width, H = cv.height;
+    if (!W || !H) return;
+    grid.width = W; grid.height = H;
+    const g = grid.getContext('2d');
+    g.fillStyle = colors.paper; g.fillRect(0, 0, W, H);
+    const lines = (step, color, width, skipEvery) => {
+      g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+      for (let i = 0, x = 0; x <= W; i++, x = i * step) {
+        if (skipEvery && i % skipEvery === 0) continue;
+        const px = Math.round(x) + 0.5; g.moveTo(px, 0); g.lineTo(px, H);
+      }
+      for (let i = 0, y = 0; y <= H; i++, y = i * step) {
+        if (skipEvery && i % skipEvery === 0) continue;
+        const py = Math.round(H - y) - 0.5; g.moveTo(0, py); g.lineTo(W, py);
+      }
+      g.stroke();
+    };
+    lines(pxPerMm, colors.minor, 1, 5);
+    lines(pxPerMm * 5, colors.major, Math.max(1, Math.round(dpr)), 0);
+  }
+
+  function draw() {
+    const W = cv.width, H = cv.height;
+    if (!W || !H) return;
+    ctx.drawImage(grid, 0, 0);
+    const pxPerSample = pxPerMm * 25 / FS;   // 25 mm/s
+    const k = pxPerMm * 10 / 1000;           // 10 mm/mV → px per µV
+    const mid = H * 0.6;
+    const head = st.head;
+    const end = Math.min(Math.floor(head), st.count - 1);
+    const visible = Math.ceil(W / pxPerSample) + 2;
+    const start = Math.max(0, end - visible, st.count - RING + 1);
+    if (end - start >= 2) {
+      ctx.beginPath();
+      for (let i = start; i <= end; i++) {
+        const x = W - (head - i) * pxPerSample;
+        const y = Math.max(1, Math.min(H - 1, mid - st.ring[i % RING] * k));
+        if (i === start) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = colors.trace; ctx.lineWidth = 1.6 * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+    // 1 mV calibration pulse (10 mm tall, 0.2 s wide), as printed on clinical ECG paper
+    const cw = Math.round(pxPerMm * 9);
+    ctx.drawImage(grid, 0, 0, cw, H, 0, 0, cw, H);
+    const x0 = pxPerMm * 1.5, w = pxPerMm * 5, h = pxPerMm * 10;
+    ctx.beginPath();
+    ctx.moveTo(x0 - pxPerMm, mid); ctx.lineTo(x0, mid); ctx.lineTo(x0, mid - h);
+    ctx.lineTo(x0 + w, mid - h); ctx.lineTo(x0 + w, mid); ctx.lineTo(x0 + w + pxPerMm, mid);
+    ctx.strokeStyle = colors.trace; ctx.lineWidth = 1.6 * dpr; ctx.stroke();
+  }
+
+  function updateReadouts() {
+    ui.hr.textContent = st.connected && st.hr != null ? st.hr : '—';
+    ui.rr.textContent = st.connected && st.lastRr != null ? st.lastRr : '—';
+    ui.bat.textContent = st.battery != null ? st.battery : '—';
+    ui.dur.textContent = fmtDur(st.recSamples / FS);
+    if (st.recSamples) {
+      ui.size.textContent = st.recSamples.toLocaleString('en-US') + ' samples · ≈ ' + fmtMB(st.recSamples * 52) + (st.markers.length ? ' · ' + st.markers.length + ' marker' + (st.markers.length > 1 ? 's' : '') : '');
+    } else {
+      ui.size.textContent = st.recording ? 'Waiting for data…' : 'Not recording';
+    }
+  }
+
+  let last = performance.now(), lastUi = 0;
+  function loop(now) {
+    const dt = Math.min(0.25, Math.max(0, (now - last) / 1000));
+    last = now;
+    if (st.demo) runDemo(dt);
+    st.head += dt * FS;
+    if (st.head > st.count) st.head = st.count;
+    if (!st.demo && st.count - st.head > FS * 2.5) st.head = st.count - FS;
+    draw();
+    if (now - lastUi > 250) { lastUi = now; updateReadouts(); }
+    requestAnimationFrame(loop);
+  }
+
+  /* ---------- Wiring ---------- */
+  ui.connect.addEventListener('click', () => { if (st.connected || st.reconnecting) disconnect(); else connect(); });
+  ui.rec.addEventListener('click', () => { if (st.recording) stopRecording(false); else if (st.connected) startRecording(); });
+  ui.mark.addEventListener('click', addMarker);
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'm' || e.key === 'M') && !e.metaKey && !e.ctrlKey && !e.altKey && st.recording) addMarker();
+  });
+  ui.ecgDl.addEventListener('click', () => {
+    if (!st.frames.length) return;
+    const blob = buildEcgCsv();
+    saveBlob(blob, 'polar-h10-ecg-' + stamp(st.recStart) + '.csv');
+    st.saved = true;
+    say('Saved the ECG file (' + fmtMB(blob.size) + ').', 'ok');
+  });
+  ui.rrDl.addEventListener('click', () => {
+    if (!st.rr.length) return;
+    saveBlob(buildRrCsv(), 'polar-h10-hr-rr-' + stamp(st.recStart) + '.csv');
+    say('Saved the HR/RR file.', 'ok');
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (st.recording || (st.frames.length && !st.saved)) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readColors); } catch (e) { /* older browsers */ }
+  new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  if ('ResizeObserver' in window) new ResizeObserver(() => resize()).observe(cv.parentElement);
+  else window.addEventListener('resize', resize);
+
+  if (!navigator.bluetooth) ui.unsupported.hidden = false;
+  readColors();
+  resize();
+  refresh();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
