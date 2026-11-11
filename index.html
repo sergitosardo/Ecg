@@ -46,6 +46,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; }
 .wrap {
@@ -93,6 +94,9 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; te
 
 .strip { position: relative; border: 1px solid var(--grid-major); border-radius: 6px; overflow: hidden; background: var(--paper); }
 .strip canvas { display: block; width: 100%; height: 200px; }
+.strip canvas, .chart canvas { touch-action: pan-y; cursor: grab; -webkit-user-select: none; user-select: none; }
+.strip canvas:active, .chart canvas:active { cursor: grabbing; }
+button, input, .switch { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .chart { position: relative; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
 .chart canvas { display: block; width: 100%; height: 180px; }
 .scale, .tag {
@@ -202,7 +206,7 @@ footer { font-size: .75rem; color: var(--muted); }
       </label>
     </div>
     <div class="strip">
-      <canvas id="ecg" role="img" aria-label="ECG trace on chart paper"></canvas>
+      <canvas id="ecg" role="img" aria-label="ECG trace on chart paper. Drag sideways to scroll back; double-tap to return to live."></canvas>
       <span id="demoTag" class="tag">Demo signal</span>
       <span class="scale"><span id="ecgSpeed">25 mm/s</span><span>10 mm/mV</span></span>
     </div>
@@ -210,7 +214,7 @@ footer { font-size: .75rem; color: var(--muted); }
       <button id="ecgIn" class="icon-btn" type="button" aria-label="Zoom in on the ECG (faster paper speed)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
       </button>
-      <input type="range" id="ecgPos" min="0" max="1000" value="1000" aria-label="Scroll through the last 10 minutes of ECG">
+      <input type="range" id="ecgZoom" min="0" max="1000" step="1" value="400" aria-label="ECG zoom: left zooms in, right zooms out">
       <button id="ecgOut" class="icon-btn" type="button" aria-label="Zoom out on the ECG (slower paper speed)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg>
       </button>
@@ -255,7 +259,7 @@ footer { font-size: .75rem; color: var(--muted); }
       <button id="rrIn" class="icon-btn" type="button" aria-label="Zoom in on R–R intervals (shorter time window)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
       </button>
-      <input type="range" id="rrPos" min="0" max="1000" value="1000" aria-label="Scroll through R–R interval history">
+      <input type="range" id="rrZoom" min="0" max="1000" step="1" value="379" aria-label="R–R zoom: left zooms in, right zooms out">
       <button id="rrOut" class="icon-btn" type="button" aria-label="Zoom out on R–R intervals (longer time window)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg>
       </button>
@@ -275,7 +279,7 @@ footer { font-size: .75rem; color: var(--muted); }
       <button id="hrIn" class="icon-btn" type="button" aria-label="Zoom in on heart rate (shorter time window)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
       </button>
-      <input type="range" id="hrPos" min="0" max="1000" value="1000" aria-label="Scroll through heart rate history">
+      <input type="range" id="hrZoom" min="0" max="1000" step="1" value="547" aria-label="Heart rate zoom: left zooms in, right zooms out">
       <button id="hrOut" class="icon-btn" type="button" aria-label="Zoom out on heart rate (longer time window)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg>
       </button>
@@ -299,8 +303,8 @@ footer { font-size: .75rem; color: var(--muted); }
       <h3>Using the charts</h3>
       <ul>
         <li>The ECG is drawn on standard chart paper: 1 mm small squares, 5 mm large squares, 10 mm per millivolt. The square pulse at the left edge is the 1 mV calibration mark.</li>
-        <li>Zoom on the ECG changes the paper speed from 6.25 to 100 mm/s; 25 mm/s is the clinical standard. On the R–R and heart-rate charts, zoom changes the time window from 30 seconds to 1 hour.</li>
-        <li>Drag a slider to scroll back. Drag it fully right, or switch Follow on, to return to live data. The ECG view keeps the last 10 minutes; recordings keep everything.</li>
+        <li>The slider under each chart sets the zoom: left zooms in, right zooms out. The magnifier buttons jump between standard steps. On the ECG, zoom is the paper speed (3.125 to 100 mm/s; 25 mm/s is the clinical standard). On the R–R and heart-rate charts it is the time window (15 seconds to 1 hour).</li>
+        <li>Drag a chart sideways to scroll back in time. Drag back to the newest data, double-tap the chart, or switch Follow on to return to live. The ECG view keeps the last 10 minutes; recordings keep everything.</li>
         <li>Smoothing applies an exponential moving average to the displayed trace only.</li>
       </ul>
     </div>
@@ -332,9 +336,13 @@ footer { font-size: .75rem; color: var(--muted); }
   const RING = FS * 600;               // 10 minutes of ECG kept for the on-screen view
   const BASE_ALPHA = 1 / (FS * 2);     // baseline-wander removal for display
   const SMOOTH_ALPHA = 0.35;           // EMA smoothing for display (≈ 11 Hz)
-  const SPEEDS = [6.25, 12.5, 25, 50, 100];
-  const WINDOWS = [30, 60, 120, 300, 600, 1800, 3600];     // seconds
-  const TICKS = [5, 10, 20, 60, 120, 300, 600];            // seconds between time labels
+  const SPEED_LADDER = [3.125, 6.25, 12.5, 25, 50, 100];  // ECG paper speeds, mm/s
+  const SPEED_MIN = 3.125, SPEED_MAX = 100;
+  const WIN_LADDER = [15, 30, 60, 120, 300, 600, 1800, 3600];   // chart windows, seconds
+  const WIN_MIN = 15, WIN_MAX = 3600;
+  const TICK_STEPS = [1, 2, 5, 10, 15, 20, 30, 60, 120, 300, 600, 900, 1800];  // seconds between time labels
+  const stepUp = (ladder, v) => ladder.find((l) => l > v * 1.001) ?? ladder[ladder.length - 1];
+  const stepDown = (ladder, v) => [...ladder].reverse().find((l) => l < v / 1.001) ?? ladder[0];
   const HIST_CAP = 200000;
   const MONO = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
 
@@ -344,7 +352,7 @@ footer { font-size: .75rem; color: var(--muted); }
     ecgDl: $('ecgDl'), rrDl: $('rrDl'), msg: $('msg'), canvas: $('ecg'), demoTag: $('demoTag'),
     unsupported: $('unsupported'), hr: $('hrVal'), rr: $('rrVal'), bat: $('batVal'), dev: $('devVal'),
     dur: $('durVal'), size: $('sizeVal'), follow: $('followTgl'), smooth: $('smoothTgl'),
-    ecgWhere: $('ecgWhere'), ecgSpeed: $('ecgSpeed'), ecgPos: $('ecgPos'), ecgIn: $('ecgIn'), ecgOut: $('ecgOut'),
+    ecgWhere: $('ecgWhere'), ecgSpeed: $('ecgSpeed'), ecgZoom: $('ecgZoom'), ecgIn: $('ecgIn'), ecgOut: $('ecgOut'),
     exportHelp: $('exportHelp'), exName: $('exName'), exShare: $('exShare'), exOpen: $('exOpen'), exCopy: $('exCopy')
   };
 
@@ -364,7 +372,8 @@ footer { font-size: .75rem; color: var(--muted); }
   const fmtMB = (b) => (b / 1e6).toFixed(b < 1e7 ? 1 : 0) + ' MB';
   const stamp = (d) => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
   const fmtClock = (t, secs) => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + (secs ? ':' + pad(d.getSeconds()) : ''); };
-  const fmtWin = (s) => (s < 60 ? s + ' s' : (s / 60) + ' min') + ' window';
+  const fmtWin = (s) => { const m = s / 60; return (s < 60 ? Math.round(s) + ' s' : (m < 10 ? +m.toFixed(1) : Math.round(m)) + ' min') + ' window'; };
+  const fmtSpeed = (v) => { const l = SPEED_LADDER.find((x) => Math.abs(x - v) < 0.01); return (l ?? (v >= 10 ? Math.round(v) : +v.toFixed(1))) + ' mm/s'; };
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   function say(text, tone) { ui.msg.textContent = text; ui.msg.dataset.tone = tone || 'info'; }
@@ -758,7 +767,7 @@ footer { font-size: .75rem; color: var(--muted); }
   /* ---------- ECG strip ---------- */
   const cv = ui.canvas, ctx = cv.getContext('2d');
   const grid = document.createElement('canvas');
-  const ecgView = { speedIdx: 2, follow: true, right: 0, dragging: false };
+  const ecgView = { speed: 25, follow: true, right: 0 };
   let dpr = 1, pxPerMm = 4, colors = {};
 
   function readColors() {
@@ -818,7 +827,7 @@ footer { font-size: .75rem; color: var(--muted); }
     lines(pxPerMm * 5, colors.major, Math.max(1, Math.round(dpr)), 0);
   }
 
-  const ecgPxPerSample = () => pxPerMm * SPEEDS[ecgView.speedIdx] / FS;
+  const ecgPxPerSample = () => pxPerMm * ecgView.speed / FS;
   function ecgRange() {
     const oldest = Math.max(0, st.count - RING + 1);
     const newest = Math.max(oldest, Math.min(st.head, st.count));
@@ -867,18 +876,13 @@ footer { font-size: .75rem; color: var(--muted); }
   }
 
   function syncEcgControls() {
-    const { oldest, newest, win } = ecgRange();
-    const span = newest - oldest;
-    ui.ecgPos.disabled = span <= win;
-    if (!ecgView.dragging) {
-      if (ecgView.follow || span <= win) ui.ecgPos.value = 1000;
-      else ui.ecgPos.value = Math.round(clamp((ecgRightEdge() - oldest - win) / (span - win), 0, 1) * 1000);
-    }
-    ui.ecgIn.disabled = ecgView.speedIdx >= SPEEDS.length - 1;
-    ui.ecgOut.disabled = ecgView.speedIdx <= 0;
-    ui.ecgSpeed.textContent = SPEEDS[ecgView.speedIdx] + ' mm/s';
+    const { newest } = ecgRange();
+    ui.ecgZoom.value = Math.round(1000 * Math.log(SPEED_MAX / ecgView.speed) / Math.log(SPEED_MAX / SPEED_MIN));
+    ui.ecgIn.disabled = ecgView.speed >= SPEED_MAX - 1e-6;
+    ui.ecgOut.disabled = ecgView.speed <= SPEED_MIN + 1e-6;
+    ui.ecgSpeed.textContent = fmtSpeed(ecgView.speed);
     if (ecgView.follow) {
-      ui.ecgWhere.textContent = st.demo ? 'Demo signal' : st.connected ? 'Live' : (st.count ? 'Last data received' : 'No data yet');
+      ui.ecgWhere.textContent = (st.demo ? 'Demo signal' : st.connected ? 'Live' : (st.count ? 'Last data received' : 'No data yet')) + (st.count > FS * 3 ? ' · drag to scroll back' : '');
     } else {
       const r = ecgRightEdge();
       const t = st.lastPushMs - (st.count - 1 - r) / FS * 1000;
@@ -888,15 +892,15 @@ footer { font-size: .75rem; color: var(--muted); }
 
   /* ---------- R–R and heart-rate charts ---------- */
   function makeSeries(o) {
-    const c = Object.assign({ follow: true, rightT: 0, dragging: false, lastW: 0, lastH: 0, lastDpr: 0 }, o);
+    const c = Object.assign({ follow: true, rightT: 0, panStart: 0, lastW: 0, lastH: 0, lastDpr: 0 }, o);
     c.cv = $(o.id); c.ctx = c.cv.getContext('2d');
-    c.pos = $(o.id.replace('Chart', 'Pos')); c.zin = $(o.id.replace('Chart', 'In')); c.zout = $(o.id.replace('Chart', 'Out'));
+    c.zoom = $(o.id.replace('Chart', 'Zoom')); c.zin = $(o.id.replace('Chart', 'In')); c.zout = $(o.id.replace('Chart', 'Out'));
     c.where = $(o.id.replace('Chart', 'Where')); c.demoTag = $(o.id.replace('Chart', 'Demo'));
     return c;
   }
   const series = [
-    makeSeries({ id: 'rrChart', data: () => st.rrHist, winIdx: 2, yMin: 0, yMax: 2, yTicks: [0, 0.5, 1, 1.5, 2], yFmt: (v) => v.toFixed(1), conv: (v) => v / 1000, colorKey: 'rr', dots: true }),
-    makeSeries({ id: 'hrChart', data: () => st.hrHist, winIdx: 3, yMin: 40, yMax: 200, yTicks: [50, 100, 150, 200], yFmt: (v) => String(v), conv: (v) => v, colorKey: 'hr', dots: false })
+    makeSeries({ id: 'rrChart', data: () => st.rrHist, win: 120, yMin: 0, yMax: 2, yTicks: [0, 0.5, 1, 1.5, 2], yFmt: (v) => v.toFixed(1), conv: (v) => v / 1000, colorKey: 'rr', dots: true }),
+    makeSeries({ id: 'hrChart', data: () => st.hrHist, win: 300, yMin: 40, yMax: 200, yTicks: [50, 100, 150, 200], yFmt: (v) => String(v), conv: (v) => v, colorKey: 'hr', dots: false })
   ];
 
   function lowerBound(arr, t) {
@@ -911,7 +915,7 @@ footer { font-size: .75rem; color: var(--muted); }
   }
   function seriesRange(c) {
     const latest = seriesLatest(c), d = c.data();
-    return { latest, oldest: d.length ? Math.min(d[0][0], latest) : latest, win: WINDOWS[c.winIdx] * 1000 };
+    return { latest, oldest: d.length ? Math.min(d[0][0], latest) : latest, win: c.win * 1000 };
   }
   function seriesRight(c) {
     const { latest, oldest, win } = seriesRange(c);
@@ -924,7 +928,7 @@ footer { font-size: .75rem; color: var(--muted); }
     if (!W || !H || !colors.surface) return;
     const padL = 10 * d, padR = 48 * d, padT = 12 * d, padB = 24 * d;
     const pw = W - padL - padR, ph = H - padT - padB;
-    const win = WINDOWS[c.winIdx] * 1000;
+    const win = c.win * 1000;
     const right = seriesRight(c), left = right - win;
     const yPx = (v) => padT + ph - (clamp(v, c.yMin, c.yMax) - c.yMin) / (c.yMax - c.yMin) * ph;
     const tPx = (t) => padL + (t - left) / win * pw;
@@ -939,7 +943,7 @@ footer { font-size: .75rem; color: var(--muted); }
       g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke();
       g.fillText(c.yFmt(v), padL + pw + 8 * d, y);
     }
-    const step = TICKS[c.winIdx] * 1000;
+    const step = (TICK_STEPS.find((x) => x >= c.win / 5) || 3600) * 1000;
     g.setLineDash([3 * d, 3 * d]); g.textAlign = 'center'; g.textBaseline = 'top';
     let labelEnd = -Infinity;
     for (let t = Math.ceil(left / step) * step; t <= right; t += step) {
@@ -983,59 +987,73 @@ footer { font-size: .75rem; color: var(--muted); }
   }
 
   function syncSeriesControls(c) {
-    const { latest, oldest, win } = seriesRange(c);
-    const span = latest - oldest;
-    c.pos.disabled = span <= win;
-    if (!c.dragging) {
-      if (c.follow || span <= win) c.pos.value = 1000;
-      else c.pos.value = Math.round(clamp((seriesRight(c) - oldest - win) / (span - win), 0, 1) * 1000);
-    }
-    c.zin.disabled = c.winIdx <= 0;
-    c.zout.disabled = c.winIdx >= WINDOWS.length - 1;
-    c.where.textContent = fmtWin(WINDOWS[c.winIdx]) + (c.follow ? '' : ' · ending ' + fmtClock(seriesRight(c), true));
+    c.zoom.value = Math.round(1000 * Math.log(c.win / WIN_MIN) / Math.log(WIN_MAX / WIN_MIN));
+    c.zin.disabled = c.win <= WIN_MIN + 1e-6;
+    c.zout.disabled = c.win >= WIN_MAX - 1e-6;
+    c.where.textContent = fmtWin(c.win) + (c.follow ? '' : ' · ending ' + fmtClock(seriesRight(c), true));
   }
 
   function syncFollowToggle() { ui.follow.checked = ecgView.follow && series.every((c) => c.follow); }
 
-  function wireSlider(input, view, onMove) {
-    input.addEventListener('pointerdown', () => { view.dragging = true; });
-    const end = () => { view.dragging = false; };
-    input.addEventListener('pointerup', end); input.addEventListener('pointercancel', end); input.addEventListener('change', end);
-    input.addEventListener('input', () => { onMove(+input.value); syncFollowToggle(); });
+  /* Drag a chart sideways to scroll through time; double-tap returns to live. */
+  function wirePan(canvas, h) {
+    let id = null, x0 = 0, moved = false;
+    canvas.addEventListener('pointerdown', (e) => { id = e.pointerId; x0 = e.clientX; moved = false; h.start(); });
+    canvas.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== id) return;
+      const dx = e.clientX - x0;
+      if (!moved && Math.abs(dx) < 6) return;
+      if (!moved) { moved = true; try { canvas.setPointerCapture(id); } catch (err) { /* ignore */ } }
+      h.move(dx * dpr);
+      syncFollowToggle();
+    });
+    const end = (e) => { if (e.pointerId === id) id = null; };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('dblclick', () => { h.live(); syncFollowToggle(); });
   }
 
-  wireSlider(ui.ecgPos, ecgView, (v) => {
-    if (v >= 995) { ecgView.follow = true; return; }
-    const { oldest, newest, win } = ecgRange();
-    ecgView.follow = false;
-    ecgView.right = oldest + win + (newest - oldest - win) * v / 1000;
-  });
-  ui.ecgIn.addEventListener('click', () => {
+  function setEcgSpeed(v) {
     if (!ecgView.follow) ecgView.right = ecgRightEdge();
-    ecgView.speedIdx = Math.min(SPEEDS.length - 1, ecgView.speedIdx + 1); syncEcgControls();
-  });
-  ui.ecgOut.addEventListener('click', () => {
-    if (!ecgView.follow) ecgView.right = ecgRightEdge();
-    ecgView.speedIdx = Math.max(0, ecgView.speedIdx - 1); syncEcgControls();
+    ecgView.speed = clamp(v, SPEED_MIN, SPEED_MAX);
+    syncEcgControls();
+  }
+  ui.ecgZoom.addEventListener('input', () => setEcgSpeed(SPEED_MAX * Math.pow(SPEED_MIN / SPEED_MAX, +ui.ecgZoom.value / 1000)));
+  ui.ecgIn.addEventListener('click', () => setEcgSpeed(stepUp(SPEED_LADDER, ecgView.speed)));
+  ui.ecgOut.addEventListener('click', () => setEcgSpeed(stepDown(SPEED_LADDER, ecgView.speed)));
+  let ecgPanStart = 0;
+  wirePan(cv, {
+    start: () => { ecgPanStart = ecgRightEdge(); },
+    move: (dxDev) => {
+      const { oldest, newest, win } = ecgRange();
+      const r = ecgPanStart - dxDev / ecgPxPerSample();
+      if (r >= newest - 0.5) { ecgView.follow = true; return; }
+      ecgView.follow = false;
+      ecgView.right = clamp(r, Math.min(oldest + win, newest), newest);
+    },
+    live: () => { ecgView.follow = true; }
   });
 
+  function setWin(c, w) {
+    if (!c.follow) c.rightT = seriesRight(c);
+    c.win = clamp(w, WIN_MIN, WIN_MAX);
+    drawSeries(c);
+  }
   series.forEach((c) => {
-    wireSlider(c.pos, c, (v) => {
-      if (v >= 995) { c.follow = true; }
-      else {
-        const { latest, oldest, win } = seriesRange(c);
-        c.follow = false;
-        c.rightT = oldest + win + (latest - oldest - win) * v / 1000;
-      }
-      drawSeries(c);
-    });
-    c.zin.addEventListener('click', () => {
-      if (!c.follow) c.rightT = seriesRight(c);
-      c.winIdx = Math.max(0, c.winIdx - 1); drawSeries(c);
-    });
-    c.zout.addEventListener('click', () => {
-      if (!c.follow) c.rightT = seriesRight(c);
-      c.winIdx = Math.min(WINDOWS.length - 1, c.winIdx + 1); drawSeries(c);
+    c.zoom.addEventListener('input', () => setWin(c, WIN_MIN * Math.pow(WIN_MAX / WIN_MIN, +c.zoom.value / 1000)));
+    c.zin.addEventListener('click', () => setWin(c, stepDown(WIN_LADDER, c.win)));
+    c.zout.addEventListener('click', () => setWin(c, stepUp(WIN_LADDER, c.win)));
+    wirePan(c.cv, {
+      start: () => { c.panStart = seriesRight(c); },
+      move: (dxDev) => {
+        const pw = Math.max(1, c.cv.width - 58 * dpr);
+        const t = c.panStart - dxDev / pw * c.win * 1000;
+        const { latest, oldest } = seriesRange(c);
+        if (t >= latest - 250) c.follow = true;
+        else { c.follow = false; c.rightT = clamp(t, Math.min(oldest + c.win * 1000, latest), latest); }
+        drawSeries(c);
+      },
+      live: () => { c.follow = true; drawSeries(c); }
     });
   });
 
